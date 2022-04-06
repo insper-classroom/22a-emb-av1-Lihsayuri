@@ -57,6 +57,8 @@ volatile char but1_flag; // variável global
 volatile char but2_flag; // variável global
 volatile char but3_flag; // variável global
 volatile int deu_o_tempo = 0;
+volatile int quinze_segundos;	
+volatile int unica_vez;
 
 
 volatile uint32_t alarm_min, alarm_sec;
@@ -77,21 +79,6 @@ void but3_callback(void) {
 	but3_flag = 1;
 }
 
-void draw_animation(void){
-	for(int j=70;j<=120;j+=2){
-		
-		gfx_mono_draw_rect(j, 20, 2, 10, GFX_PIXEL_SET);
-		delay_ms(10);
-		
-	}
-	
-	for(int j=120;j>=70;j-=2){
-		
-		gfx_mono_draw_rect(j, 20, 2, 10, GFX_PIXEL_CLR);
-		delay_ms(10);
-		
-	}
-}
 
 void TC1_Handler(void) {
 	/**
@@ -101,6 +88,9 @@ void TC1_Handler(void) {
 	volatile uint32_t status = tc_get_status(TC0, 1);
 
 	/** Muda o estado do LED (pisca) **/
+	
+	unica_vez = 0;
+	quinze_segundos = 1;
 
 	if (alarm_sec <= 0 && alarm_min <= 0){
 		alarm_sec = 0;
@@ -117,20 +107,57 @@ void TC1_Handler(void) {
 
 }
 
-void TC2_Handler(void) {
-
-	volatile uint32_t status = tc_get_status(TC0, 2);
-
-	/** Muda o estado do LED (pisca) **/
-	pin_toggle(LED_PIO, LED_PIO_IDX_MASK);  
-}
-
 
 void TC0_Handler(void) {
 	volatile uint32_t status = tc_get_status(TC0, 0);
 	pin_toggle(LED3_PIO, LED3_PIO_IDX_MASK);
 }
 
+void RTT_Handler(void) {
+	uint32_t ul_status;
+
+	/* Get RTT status - ACK */
+	ul_status = rtt_get_status(RTT);
+
+	/* IRQ due to Alarm */
+	if ((ul_status & RTT_SR_ALMS) == RTT_SR_ALMS) {
+		quinze_segundos = 0;
+	
+	}
+	
+	/* IRQ due to Time has changed */
+	if ((ul_status & RTT_SR_RTTINC) == RTT_SR_RTTINC) {
+	}
+
+}
+
+static void RTT_init(float freqPrescale, uint32_t IrqNPulses, uint32_t rttIRQSource) {
+
+	uint16_t pllPreScale = (int) (((float) 32768) / freqPrescale);
+	
+	rtt_sel_source(RTT, false);
+	rtt_init(RTT, pllPreScale);
+	
+	if (rttIRQSource & RTT_MR_ALMIEN) {
+		uint32_t ul_previous_time;
+		ul_previous_time = rtt_read_timer_value(RTT);
+		while (ul_previous_time == rtt_read_timer_value(RTT));
+		rtt_write_alarm_time(RTT, IrqNPulses+ul_previous_time);
+	}
+
+	/* config NVIC */
+	NVIC_DisableIRQ(RTT_IRQn);
+	NVIC_ClearPendingIRQ(RTT_IRQn);
+	NVIC_SetPriority(RTT_IRQn, 4);
+	NVIC_EnableIRQ(RTT_IRQn);
+
+	/* Enable RTT interrupt */
+	if (rttIRQSource & (RTT_MR_RTTINCIEN | RTT_MR_ALMIEN))
+	rtt_enable_interrupt(RTT, rttIRQSource);
+	else
+	rtt_disable_interrupt(RTT, RTT_MR_RTTINCIEN | RTT_MR_ALMIEN);
+	
+}
 
 void pin_toggle(Pio *pio, uint32_t mask) {
 	if(pio_get_output_data_status(pio, mask))
@@ -209,16 +236,35 @@ void TC_init(Tc * TC, int ID_TC, int TC_CHANNEL, int freq){
 }
 
 
-void draw_time (uint32_t current_hour, uint32_t current_min, uint32_t current_sec){
-	char tempo[20];
-	sprintf(tempo, "%02d:%02d:%02d", current_hour, current_min, current_sec);
-	gfx_mono_draw_string(tempo, 5,5, &sysfont);
-}
-
 void draw_alarm (uint32_t current_min, uint32_t current_sec){
 	char tempo[20];
 	sprintf(tempo, "%02d:%02d", current_min, current_sec);
 	gfx_mono_draw_string(tempo, 5,18, &sysfont);
+}
+
+void draw_cronometro(int i, Pio *p_pio, const pio_type_t ul_type, const uint32_t ul_mask ){
+	int delay = 300;
+	while (!pio_get(p_pio, ul_type, ul_mask)){
+		alarm_sec+=i;
+		if (delay <= 80){
+			delay = 50;
+		}
+		if (alarm_sec >= 60){ // Deve ser o valor configurado pelo usuário, sendo que o valor máximo deve ser 60 minutos : 60 segundos.
+			alarm_sec = 0;
+			alarm_min+=1;
+		}
+		if (alarm_min >= 61){
+			alarm_min = 0;
+		}
+		delay_ms(delay);
+		delay-= 20;
+		draw_alarm(alarm_min, alarm_sec);
+	}
+}
+
+void para_de_apitar_microondas(void){
+	tc_stop(TC0, 0); // para de apitar quando abre a porta do microondas
+	pio_set(LED3_PIO, LED3_PIO_IDX_MASK); // e por default vai pra 0;
 }
 
 
@@ -237,80 +283,49 @@ int main (void)
 	gfx_mono_ssd1306_init();
 	
 	int piscando = 0;             
-	int esquentado_comida = 0;                                                                                         
+	int esquentado_comida = 0; 
+                                                                                        
 	
 	while(1) {
-
-		if (but3_flag){
+		if (but3_flag){			
+			
+			quinze_segundos = 1;
 			deu_o_tempo = 0;
-			tc_stop(TC0, 0); // para de apitar quando abre a porta do microondas
-			pio_set(LED3_PIO, LED3_PIO_IDX_MASK);
-
-			int delay = 300;
-			while (!pio_get(BUT3_PIO, PIO_INPUT, BUT3_PIO_IDX_MASK)){
-				alarm_sec+=5;
-				if (delay <= 80){
-					delay = 50;
-				} 
-				if (alarm_sec >= 60){ // Deve ser o valor configurado pelo usuário, sendo que o valor máximo deve ser 60 minutos : 60 segundos.
-					alarm_sec = 0;
-					alarm_min+=1;
-				}
-				if (alarm_min >= 61){
-					alarm_min = 0;
-				}
-				delay_ms(delay);
-				delay-= 20;
-				draw_alarm(alarm_min, alarm_sec);
-			} 			
-	
 			but3_flag = 0;
+
+			para_de_apitar_microondas();
+
+			draw_cronometro(5, BUT3_PIO, PIO_INPUT, BUT3_PIO_IDX_MASK);			
 			
 			delay_ms(200);
+		
 			pio_clear(LED1_PIO, LED1_PIO_IDX_MASK);
 			pio_clear(LED2_PIO, LED2_PIO_IDX_MASK);
 
 			esquentado_comida = 1;
+			
 			TC_init(TC0, ID_TC1, 1, 1);
 			tc_start(TC0, 1);
 
 		}
 		
 		if (but2_flag){
+			quinze_segundos = 1;
+
 			deu_o_tempo = 0;
-			tc_stop(TC0, 0); // para de apitar quando abre a porta do microondas
-			pio_set(LED3_PIO, LED3_PIO_IDX_MASK);
-
-
-			int delay = 300;
-			
-			while (!pio_get(BUT2_PIO, PIO_INPUT, BUT2_PIO_IDX_MASK)){
-				alarm_sec+=10;
-				if (delay <= 80){
-					delay = 50;
-				}
-				if (alarm_sec >= 60){
-					alarm_sec = 0;
-					alarm_min+=1;
-				}
-				if (alarm_min >= 61){
-					alarm_min = 0;
-				}
-				delay_ms(delay);
-				delay-= 20;
-				draw_alarm(alarm_min, alarm_sec);
-			}
-			
 			but2_flag = 0;
+
+			para_de_apitar_microondas();
+
+			draw_cronometro(10, BUT2_PIO, PIO_INPUT, BUT2_PIO_IDX_MASK);
 			
 			delay_ms(200);
 			pio_clear(LED1_PIO, LED1_PIO_IDX_MASK);
 			pio_clear(LED2_PIO, LED2_PIO_IDX_MASK);
-			
+
 			esquentado_comida = 1;
 			TC_init(TC0, ID_TC1, 1, 1);
 			tc_start(TC0, 1);
-
 		}
 		if (!(deu_o_tempo) && but1_flag){ // abre a porta do microondas
 			
@@ -337,24 +352,33 @@ int main (void)
 
 			but1_flag = 0;
 		}
+		
 		if (deu_o_tempo){
 			 tc_stop(TC0, 1);
 
 			 esquentado_comida = 0;
 			 TC_init(TC0, ID_TC0, 0, 10);
 			 tc_start(TC0, 0);
-			 pio_set(LED1_PIO, LED1_PIO_IDX_MASK);
+			 			 
+			 if (!unica_vez){
+				 unica_vez = 1;
+				 pio_clear(LED1_PIO, LED1_PIO_IDX_MASK);
+				 RTT_init(1, 15, RTT_MR_ALMIEN);
+			 }
+			 
 			 pio_set(LED2_PIO, LED2_PIO_IDX_MASK);
 			 if (but1_flag){
 				 esquentado_comida = 0;
 				 deu_o_tempo = 0;
-
-				 tc_stop(TC0, 0); // para de apitar quando abre a porta do microondas
-				 pio_set(LED3_PIO, LED3_PIO_IDX_MASK);
+				 para_de_apitar_microondas();
 				 pio_set(LED2_PIO, LED2_PIO_IDX_MASK);
 				 but1_flag = 0;
 			 }
 
+		}
+		
+		if (!quinze_segundos){
+			pio_set(LED1_PIO, LED1_PIO_IDX_MASK);
 		}
 		
 		draw_alarm(alarm_min, alarm_sec);
