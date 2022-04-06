@@ -256,6 +256,9 @@ int main (void)
 					alarm_sec = 0;
 					alarm_min+=1;
 				}
+				if (alarm_min >= 61){
+					alarm_min = 0;
+				}
 				delay_ms(delay);
 				delay-= 20;
 				draw_alarm(alarm_min, alarm_sec);
@@ -289,6 +292,9 @@ int main (void)
 				if (alarm_sec >= 60){
 					alarm_sec = 0;
 					alarm_min+=1;
+				}
+				if (alarm_min >= 61){
+					alarm_min = 0;
 				}
 				delay_ms(delay);
 				delay-= 20;
@@ -332,7 +338,8 @@ int main (void)
 			but1_flag = 0;
 		}
 		if (deu_o_tempo){
-			 deu_o_tempo = 0;
+			 tc_stop(TC0, 1);
+
 			 esquentado_comida = 0;
 			 TC_init(TC0, ID_TC0, 0, 10);
 			 tc_start(TC0, 0);
@@ -340,23 +347,15 @@ int main (void)
 			 pio_set(LED2_PIO, LED2_PIO_IDX_MASK);
 			 if (but1_flag){
 				 esquentado_comida = 0;
+				 deu_o_tempo = 0;
+
 				 tc_stop(TC0, 0); // para de apitar quando abre a porta do microondas
 				 pio_set(LED3_PIO, LED3_PIO_IDX_MASK);
 				 pio_set(LED2_PIO, LED2_PIO_IDX_MASK);
 				 but1_flag = 0;
-
 			 }
 
 		}
-		
-		//if (deu_o_tempo && but1_flag){
-			//deu_o_tempo = 0;
-			//esquentado_comida = 0;
-			//tc_stop(TC0, 0); // para de apitar quando abre a porta do microondas
-			//pio_set(LED3_PIO, LED3_PIO_IDX_MASK);
-			//pio_set(LED2_PIO, LED2_PIO_IDX_MASK);
-		//}
-		
 		
 		draw_alarm(alarm_min, alarm_sec);
 				
